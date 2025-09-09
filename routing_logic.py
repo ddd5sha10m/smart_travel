@@ -170,82 +170,90 @@ def solve_intra_cluster_tsp(entry_point_idx, exit_point_idx, internal_points_ind
     return best_path
 
 
-def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, gmaps_client,mode='driving'):
+def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, gmaps_client, mode='driving'):
     """
-    建立最終的點對點行程。
+    建立最終的點對點行程 (V2 - Refactored for Correctness)。
     """
     final_route_indices = []
-    
-    # 處理單一群集的情況
-    if len(clusters) == 1:
-        # 如果只有一個群集，我們可以簡單地用基因演算法或窮舉法找出最佳路徑
-        # 這裡我們先簡化處理，直接返回群集內的點
-        return clusters[0]
-
-    # 將原始索引轉換為地址，方便 API 呼叫
     loc_addrs = [locations[i] for i in range(len(locations))]
     cluster_point_addrs = [[loc_addrs[p_idx] for p_idx in c] for c in clusters]
-    
-    last_exit_point_idx = None # 用於追蹤上一個群集的離開點
+    last_exit_point_idx = None
 
     for i, cluster_idx in enumerate(cluster_order):
         current_cluster_indices = clusters[cluster_idx]
         
-        # --- 1. 決定進入點 (Entry Point) ---
-        if i == 0: # 如果是第一個群集
-            # 暫時將群集的第一個點作為起點
-            # 未來可以優化成選擇離使用者出發點最近的點
-            entry_point_idx = current_cluster_indices[0]
-        else: # 如果不是第一個群集
-            prev_cluster_idx = cluster_order[i-1]
-            # 進入點 = 當前群集中，離上一個群集離開點最近的點
-            _, _, best_dest_idx = find_closest_point_pair(
-                gmaps_client,
-                [loc_addrs[last_exit_point_idx]], # 上一個離開點的地址
-                cluster_point_addrs[cluster_idx], # 當前群集所有點的地址
-                mode='walking' # 群集間交接時，通常也是步行
-            )
-            entry_point_idx = current_cluster_indices[best_dest_idx]
+        # --- 全新的、分情況的最佳化邏輯 ---
 
-        # --- 2. 決定離開點 (Exit Point) ---
-        if i == len(cluster_order) - 1: # 如果是最後一個群集
-            # 暫時將進入點設為離開點，因為沒有下一個目的地
-            exit_point_idx = entry_point_idx
-        else: # 如果不是最後一個群集
-            next_cluster_idx = cluster_order[i+1]
-            
-            # 找出當前群集到下一個群集最近的點對
+        if i == 0:  # --- Case 1: The VERY FIRST cluster ---
+            print("優化第一個群集...")
+            # 目標：找出一個最佳路徑，使其離開點 (exit_point) 最靠近下一個群集。
+            next_cluster_idx = cluster_order[i + 1]
             _, best_origin_idx, _ = find_closest_point_pair(
-                gmaps_client,
-                cluster_point_addrs[cluster_idx], # 當前群集所有點
-                cluster_point_addrs[next_cluster_idx], # 下一個群集所有點
-                mode=mode # 群集間的移動是大交通
-            )
+                gmaps_client, cluster_point_addrs[cluster_idx], cluster_point_addrs[next_cluster_idx], mode=mode)
             exit_point_idx = current_cluster_indices[best_origin_idx]
 
-        # --- 處理進入點和離開點可能是同一個點的特殊情況 ---
-        internal_points = [p for p in current_cluster_indices if p != entry_point_idx and p != exit_point_idx]
-        
-        if entry_point_idx == exit_point_idx and len(current_cluster_indices) > 1:
-            if not internal_points: # 如果只有兩個點且進出點相同
-                # 選另一個點當離開點
-                other_point = [p for p in current_cluster_indices if p != entry_point_idx][0]
-                internal_points = [other_point]
-                exit_point_idx = entry_point_idx # 終點設回進入點，形成 A->B->A 的小環路
-            else: # 如果超過兩個點，離開點就是內部點走完的最後一個
-                pass # 在 TSP 中處理
+            # 找出除了離開點以外的其他點
+            internal_points = [p for p in current_cluster_indices if p != exit_point_idx]
+            
+            if not internal_points: # 如果群集只有一個點
+                cluster_path = [exit_point_idx]
+            else:
+                # 暴力窮舉：嘗試從每一個 internal_point 出發，到 exit_point 結束的最佳路徑
+                best_path_for_first_cluster = []
+                min_duration = float('inf')
 
-        # --- 3. 規劃群集內部路徑 ---
-        cluster_path = solve_intra_cluster_tsp(entry_point_idx, exit_point_idx, internal_points, walking_matrix)
-        
-        # --- 4. 合併到最終路徑 ---
-        # 更新最後的離開點
+                for start_candidate in internal_points:
+                    middle_points = [p for p in internal_points if p != start_candidate]
+                    path = solve_intra_cluster_tsp(start_candidate, exit_point_idx, middle_points, walking_matrix)
+                    
+                    # 計算這條路徑的總長
+                    path_duration = sum(walking_matrix[path[k]][path[k+1]] for k in range(len(path) - 1))
+                    
+                    if path_duration < min_duration:
+                        min_duration = path_duration
+                        best_path_for_first_cluster = path
+                
+                cluster_path = best_path_for_first_cluster
+            
+            last_exit_point_idx = exit_point_idx
+
+        elif i == len(cluster_order) - 1:  # --- Case 3: The VERY LAST cluster ---
+            print("優化最後一個群集...")
+            # 目標：從最靠近上一個群集的進入點 (entry_point) 開始，走一條最短的開放路徑。
+            prev_cluster_addrs = [loc_addrs[last_exit_point_idx]]
+            _, _, best_dest_idx = find_closest_point_pair(
+                gmaps_client, prev_cluster_addrs, cluster_point_addrs[cluster_idx], mode=mode)
+            entry_point_idx = current_cluster_indices[best_dest_idx]
+
+            internal_points = [p for p in current_cluster_indices if p != entry_point_idx]
+
+            # 從進入點開始，規劃一條走完剩下點的最短開放路徑
+            open_path_internal = solve_open_tsp_bruteforce(internal_points, walking_matrix)
+            cluster_path = [entry_point_idx] + open_path_internal
+            
+        else:  # --- Case 2: Intermediate clusters ---
+            print("優化中間群集...")
+            # 目標：規劃一條從 entry_point 到 exit_point 的最短路徑。
+            # 1. 決定進入點 (修正 Bug：使用 mode 而不是 'walking')
+            prev_cluster_addrs = [loc_addrs[last_exit_point_idx]]
+            _, _, best_dest_idx = find_closest_point_pair(
+                gmaps_client, prev_cluster_addrs, cluster_point_addrs[cluster_idx], mode=mode)
+            entry_point_idx = current_cluster_indices[best_dest_idx]
+
+            # 2. 決定離開點
+            next_cluster_idx = cluster_order[i + 1]
+            _, best_origin_idx, _ = find_closest_point_pair(
+                gmaps_client, cluster_point_addrs[cluster_idx], cluster_point_addrs[next_cluster_idx], mode=mode)
+            exit_point_idx = current_cluster_indices[best_origin_idx]
+
+            internal_points = [p for p in current_cluster_indices if p != entry_point_idx and p != exit_point_idx]
+            cluster_path = solve_intra_cluster_tsp(entry_point_idx, exit_point_idx, internal_points, walking_matrix)
+            last_exit_point_idx = exit_point_idx
+
+        # --- 合併路徑 ---
         for point_idx in cluster_path:
             if point_idx not in final_route_indices:
                 final_route_indices.append(point_idx)
-
-        # CORRECT: 直接使用我們之前計算好的、真正的離開點
-        last_exit_point_idx = exit_point_idx
 
     return final_route_indices
 
