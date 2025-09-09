@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智慧行程規劃 - 結果</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>你的最佳行程</h1>
+        <div class="results-layout">
+            <div class="itinerary-panel">
+                <h2>建議路線</h2>
+                <ol id="itinerary-list">
+                    </ol>
+                <a href="/" class="back-button">返回重新規劃</a>
+            </div>
+            <div id="map"></div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/results.js') }}"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ api_key }}&callback=initMap&libraries=geometry,places" async defer></script>
+</body>
+</html>
