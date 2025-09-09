@@ -170,7 +170,7 @@ def solve_intra_cluster_tsp(entry_point_idx, exit_point_idx, internal_points_ind
     return best_path
 
 
-def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, gmaps_client):
+def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, gmaps_client,mode='driving'):
     """
     建立最終的點對點行程。
     """
@@ -219,7 +219,7 @@ def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, g
                 gmaps_client,
                 cluster_point_addrs[cluster_idx], # 當前群集所有點
                 cluster_point_addrs[next_cluster_idx], # 下一個群集所有點
-                mode='driving' # 群集間的移動是大交通
+                mode=mode # 群集間的移動是大交通
             )
             exit_point_idx = current_cluster_indices[best_origin_idx]
 
@@ -238,12 +238,47 @@ def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, g
         # --- 3. 規劃群集內部路徑 ---
         cluster_path = solve_intra_cluster_tsp(entry_point_idx, exit_point_idx, internal_points, walking_matrix)
         
-        # 移除重複加入的點 (例如上一個的離開點和下一個的進入點是同一個)
+        # --- 4. 合併到最終路徑 ---
+        # 更新最後的離開點
         for point_idx in cluster_path:
             if point_idx not in final_route_indices:
                 final_route_indices.append(point_idx)
 
-        # 更新最後的離開點
-        last_exit_point_idx = final_route_indices[-1] if final_route_indices else None
+        # CORRECT: 直接使用我們之前計算好的、真正的離開點
+        last_exit_point_idx = exit_point_idx
 
     return final_route_indices
+
+def solve_open_tsp_bruteforce(point_indices, matrix):
+    """
+    使用暴力窮舉法解決一個開放路徑的 TSP 問題（不需回到起點）。
+    適用於單一群集內部路徑規劃。
+
+    Args:
+        point_indices (list): 需要被排序的地點索引列表。
+        matrix (list of lists): 包含這些地點之間交通時間的完整矩陣。
+
+    Returns:
+        list: 最佳化的地點索引順序。
+    """
+    if len(point_indices) <= 2:
+        return point_indices
+
+    best_path = []
+    min_total_duration = float('inf')
+
+    # 窮舉所有可能的排列
+    for permutation in itertools.permutations(point_indices):
+        current_duration = 0
+        # 計算當前排列路徑的總時間
+        for i in range(len(permutation) - 1):
+            start_node = permutation[i]
+            end_node = permutation[i+1]
+            current_duration += matrix[start_node][end_node]
+        
+        # 如果找到更短的路徑，就更新紀錄
+        if current_duration < min_total_duration:
+            min_total_duration = current_duration
+            best_path = list(permutation)
+            
+    return best_path

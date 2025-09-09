@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from cluster_logic import perform_clustering
 # 匯入我們新建立的路徑規劃函式
-from routing_logic import calculate_cluster_matrix, solve_cluster_tsp_with_ga, create_final_itinerary
+from routing_logic import calculate_cluster_matrix, solve_cluster_tsp_with_ga, create_final_itinerary, solve_open_tsp_bruteforce
 # --- 1. 初始化設定 (與之前相同) ---
 app = Flask(__name__)
 load_dotenv()
@@ -44,6 +44,13 @@ def plan_route_api():
         return jsonify({"error": "請求中缺少 'locations' 列表"}), 400
     locations = data['locations']
     
+    # 定義可接受的交通方式
+    allowed_modes = ['driving', 'transit', 'bicycling']
+    # 從請求中讀取 travel_mode，如果使用者沒提供，預設為 'driving'
+    travel_mode = data.get('travel_mode', 'driving')
+    
+    if travel_mode not in allowed_modes:
+        return jsonify({"error": f"不支援的 travel_mode: '{travel_mode}'。請使用 {allowed_modes} 中的一個。"}), 400
     # 步驟 1: 計算步行時間矩陣
     walking_matrix = get_walking_time_matrix(locations)
     if not walking_matrix:
@@ -51,34 +58,49 @@ def plan_route_api():
 
     # 步驟 2: 執行地點分群
     clusters = perform_clustering(walking_matrix)
-    if not clusters or len(clusters) == 1:
-        # 如果只有一個群集，就不需要進行群集間的規劃
-        return jsonify({
+    if len(clusters) == 1:
+        # --- 處理單一群集的特殊情況 ---
+        print("偵測到單一群集，執行內部路徑優化...")
+        single_cluster_indices = clusters[0]
+        
+        # 使用暴力窮舉法找出此群集內部的最佳步行路徑
+        final_route_indices = solve_open_tsp_bruteforce(single_cluster_indices, walking_matrix)
+        final_route_locations = [locations[i] for i in final_route_indices]
+
+        response = {
+            "message": "所有地點都在同一個步行區域內，已優化內部步行路線。",
+            "travel_mode_used": "walking",
             "locations": locations,
-            "walking_time_matrix_seconds": walking_matrix,
-            "clusters": clusters
-        })
+            "clusters": clusters,
+            "final_itinerary_indices": final_route_indices,
+            "final_itinerary_locations": final_route_locations
+        }
+        return jsonify(response)
 
     # 步驟 3a (新): 執行宏觀路徑規劃
     # 3a.1: 計算群集之間的交通時間矩陣 (這裡以開車為例)
-    cluster_driving_matrix = calculate_cluster_matrix(gmaps, locations, clusters, mode='driving')
-    if cluster_driving_matrix is None:
+    cluster_travel_matrix = calculate_cluster_matrix(gmaps, locations, clusters, mode=travel_mode)
+    if cluster_travel_matrix is None:
         return jsonify({"error": "無法計算群集交通矩陣"}), 500
 
     # 3a.2: 使用基因演算法找出最佳群集順序
-    optimal_cluster_order = solve_cluster_tsp_with_ga(cluster_driving_matrix)
+    optimal_cluster_order = solve_cluster_tsp_with_ga(cluster_travel_matrix)
     final_route_indices = create_final_itinerary(locations, clusters, optimal_cluster_order, walking_matrix, gmaps)
 
     # 將索引轉換回地點名稱，方便閱讀
+    final_route_indices = create_final_itinerary(locations, clusters, optimal_cluster_order, walking_matrix, gmaps, mode=travel_mode)
+
     final_route_locations = [locations[i] for i in final_route_indices]
     
     # 組合最終的回應
     response = {
+        "travel_mode_used": travel_mode,
         "locations": locations,
         "clusters": clusters,
         "optimal_cluster_order": optimal_cluster_order,
         "final_itinerary_indices": final_route_indices,
         "final_itinerary_locations": final_route_locations,
+        "cluster_travel_matrix_seconds": cluster_travel_matrix.tolist()
         # (也可以保留矩陣資訊，方便除錯)
         # "walking_time_matrix_seconds": walking_matrix,
         # "cluster_driving_matrix_seconds": cluster_driving_matrix.tolist(),
