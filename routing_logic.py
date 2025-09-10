@@ -40,7 +40,7 @@ def calculate_cluster_matrix(gmaps_client, locations_list, clusters, mode='drivi
                 matrix_result = gmaps_client.distance_matrix(origins=origins,
                                                              destinations=destinations,
                                                              mode=mode,
-                                                             language="zh-TW")
+                                                             )
                 
                 # 從所有可能的路徑中，找出時間最短的那一條
                 min_duration = float('inf')
@@ -59,7 +59,7 @@ def calculate_cluster_matrix(gmaps_client, locations_list, clusters, mode='drivi
 
     return cluster_matrix
 
-
+'''
 def solve_cluster_tsp_with_ga(cluster_matrix):
     """
     使用基因演算法解決群集順序的 TSP 問題。
@@ -98,7 +98,7 @@ def solve_cluster_tsp_with_ga(cluster_matrix):
     # 建立並執行模型
     model = ga(function=fitness_function,
                dimension=num_clusters,
-               variable_type='int',
+               variable_type='float',
                variable_boundaries=varbound,
                variable_type_mixed=None,
                function_timeout=10,
@@ -113,6 +113,33 @@ def solve_cluster_tsp_with_ga(cluster_matrix):
     
     print(f"基因演算法找到的最佳群集順序: {best_route}")
     return best_route
+'''
+def solve_cluster_tsp_bruteforce(cluster_matrix):
+    """
+    使用暴力窮舉法，找到拜訪所有群集的絕對最佳順序。
+    """
+    num_clusters = len(cluster_matrix)
+    if num_clusters <= 2:
+        return list(range(num_clusters))
+
+    min_path_duration = float('inf')
+    best_path = []
+    
+    # 產生從 0 到 n-1 的所有排列組合
+    for permutation in itertools.permutations(range(num_clusters)):
+        current_duration = 0
+        for i in range(num_clusters - 1):
+            start_node = permutation[i]
+            end_node = permutation[i+1]
+            current_duration += cluster_matrix[start_node][end_node]
+        
+        if current_duration < min_path_duration:
+            min_path_duration = current_duration
+            best_path = list(permutation)
+            
+    print(f"窮舉法找到的最佳群集順序: {best_path}")
+    return best_path
+
 
 def find_closest_point_pair(gmaps_client, origins_addrs, dests_addrs, mode='driving'):
     """
@@ -125,7 +152,7 @@ def find_closest_point_pair(gmaps_client, origins_addrs, dests_addrs, mode='driv
     matrix_result = gmaps_client.distance_matrix(origins=origins_addrs,
                                                  destinations=dests_addrs,
                                                  mode=mode,
-                                                 language="zh-TW")
+                                                 )
     min_duration = float('inf')
     best_origin_idx, best_dest_idx = -1, -1
 
@@ -140,7 +167,7 @@ def find_closest_point_pair(gmaps_client, origins_addrs, dests_addrs, mode='driv
     
     return min_duration, best_origin_idx, best_dest_idx
 
-
+'''
 def solve_intra_cluster_tsp(entry_point_idx, exit_point_idx, internal_points_indices, walking_matrix):
     """
     使用暴力窮舉法，解決群集內部的 TSP 問題。
@@ -168,8 +195,63 @@ def solve_intra_cluster_tsp(entry_point_idx, exit_point_idx, internal_points_ind
             best_path = current_path
             
     return best_path
+'''
+def solve_points_tsp_with_ga(point_indices, full_walking_matrix):
+    """
+    使用基因演算法，解決一組指定地點（開放路徑）的 TSP 問題。
+    (V2 - 新增重複懲罰，確保路線合法)
+    """
+    num_points = len(point_indices)
+    if num_points <= 2:
+        return point_indices
 
+    # --- 建立子矩陣 (邏輯不變) ---
+    sub_matrix = np.full((num_points, num_points), 0)
+    index_map = {i: original_idx for i, original_idx in enumerate(point_indices)}
+    for i in range(num_points):
+        for j in range(num_points):
+            sub_matrix[i][j] = full_walking_matrix[index_map[i]][index_map[j]]
+    
+    # --- 改造適應度函式 ---
+    def fitness_function(solution):
+        
+        # --- 新增的懲罰邏輯 ---
+        # 檢查 solution 中是否有重複的數字。
+        # set(solution) 會移除重複項，如果長度變短，代表有重複。
+        if len(set(solution)) < num_points:
+            # 如果有重複，給予一個極大的懲罰值，讓此解被淘汰
+            return float('inf')
+        # --- 懲罰邏輯結束 ---
 
+        # (計算總時間的邏輯不變)
+        total_time = 0
+        for i in range(num_points - 1):
+            start_node = int(solution[i])
+            end_node = int(solution[i+1])
+            total_time += sub_matrix[start_node][end_node]
+        return total_time
+
+    # (演算法參數和執行的部分不變)
+    varbound = np.array([[0, num_points-1]] * num_points)
+    algorithm_param = {
+        'max_num_iteration': 1500,        # 增加迭代次數，給予更多演化時間
+        'population_size': 100,           # 增加族群大小，提升多樣性
+        'mutation_probability': 0.1,      # 保持或微調突變率
+        'elit_ratio': 0.01,
+        'crossover_probability': 0.5,
+        'parents_portion': 0.3,
+        'crossover_type': 'one_point',
+        'max_iteration_without_improv': None
+    }
+    model = ga(function=fitness_function, dimension=num_points, variable_type='int', variable_boundaries=varbound, algorithm_parameters=algorithm_param, convergence_curve=False, progress_bar=False)
+    model.run()
+    
+    best_local_route = model.best_variable.astype(int)
+    best_global_route = [index_map[i] for i in best_local_route]
+    
+    return best_global_route
+
+'''
 def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, gmaps_client, mode='driving'):
     """
     建立最終的點對點行程 (V2 - Refactored for Correctness)。
@@ -204,7 +286,7 @@ def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, g
 
                 for start_candidate in internal_points:
                     middle_points = [p for p in internal_points if p != start_candidate]
-                    path = solve_intra_cluster_tsp(start_candidate, exit_point_idx, middle_points, walking_matrix)
+                    path = solve_cluster_tsp_bruteforce(start_candidate, exit_point_idx, middle_points, walking_matrix)
                     
                     # 計算這條路徑的總長
                     path_duration = sum(walking_matrix[path[k]][path[k+1]] for k in range(len(path) - 1))
@@ -247,7 +329,7 @@ def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, g
             exit_point_idx = current_cluster_indices[best_origin_idx]
 
             internal_points = [p for p in current_cluster_indices if p != entry_point_idx and p != exit_point_idx]
-            cluster_path = solve_intra_cluster_tsp(entry_point_idx, exit_point_idx, internal_points, walking_matrix)
+            cluster_path = solve_cluster_tsp_bruteforce(entry_point_idx, exit_point_idx, internal_points, walking_matrix)
             last_exit_point_idx = exit_point_idx
 
         # --- 合併路徑 ---
@@ -256,6 +338,78 @@ def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, g
                 final_route_indices.append(point_idx)
 
     return final_route_indices
+'''
+# (用這個新版本，完整替換 routing_logic.py 中的 create_final_itinerary)
+def create_final_itinerary(locations, clusters, cluster_order, walking_matrix, gmaps_client, mode='driving'):
+    """
+    建立最終的點對點行程 (V4 - Fixed Path Correction)。
+    """
+    final_route_indices = []
+    loc_addrs = [locations[i] for i in range(len(locations))]
+    cluster_point_addrs = [[loc_addrs[p_idx] for p_idx in c] for c in clusters]
+    last_exit_point_idx = None
+
+    for i, cluster_idx in enumerate(cluster_order):
+        current_cluster_indices = clusters[cluster_idx]
+        
+        if len(current_cluster_indices) <= 1:
+             cluster_path = current_cluster_indices
+             if cluster_path: # 如果群集不是空的
+                last_exit_point_idx = cluster_path[0]
+        elif i == 0:
+            # 優化第一個群集：找出一個最佳路徑，使其離開點最靠近下一個群集
+            next_cluster_idx = cluster_order[i + 1]
+            _, best_origin_idx, _ = find_closest_point_pair(gmaps_client, cluster_point_addrs[cluster_idx], cluster_point_addrs[next_cluster_idx], mode=mode)
+            exit_point_idx = current_cluster_indices[best_origin_idx]
+            internal_points = [p for p in current_cluster_indices if p != exit_point_idx]
+            
+            # 使用開放路徑 GA 來規劃從起點到離開點的路徑
+            path_candidate = solve_points_tsp_with_ga(internal_points + [exit_point_idx], walking_matrix)
+            if path_candidate[-1] != exit_point_idx: path_candidate.reverse()
+            cluster_path = path_candidate
+            last_exit_point_idx = exit_point_idx
+            
+        elif i == len(cluster_order) - 1:
+            # 優化最後一個群集：從最靠近上一個群集的進入點開始，走一條最短的開放路徑
+            prev_cluster_addrs = [loc_addrs[last_exit_point_idx]]
+            _, _, best_dest_idx = find_closest_point_pair(gmaps_client, prev_cluster_addrs, cluster_point_addrs[cluster_idx], mode=mode)
+            entry_point_idx = current_cluster_indices[best_dest_idx]
+            internal_points = [p for p in current_cluster_indices if p != entry_point_idx]
+            
+            # 使用開放路徑 GA
+            path_candidate = solve_points_tsp_with_ga([entry_point_idx] + internal_points, walking_matrix)
+            if path_candidate[0] != entry_point_idx: path_candidate.reverse()
+            cluster_path = path_candidate
+            
+        else:
+            # --- 最關鍵的修正：處理中間群集 ---
+            # 1. 嚴格計算進入點和離開點
+            prev_cluster_addrs = [loc_addrs[last_exit_point_idx]]
+            _, _, best_dest_idx = find_closest_point_pair(gmaps_client, prev_cluster_addrs, cluster_point_addrs[cluster_idx], mode=mode)
+            entry_point_idx = current_cluster_indices[best_dest_idx]
+
+            next_cluster_idx = cluster_order[i + 1]
+            _, best_origin_idx, _ = find_closest_point_pair(gmaps_client, cluster_point_addrs[cluster_idx], cluster_point_addrs[next_cluster_idx], mode=mode)
+            exit_point_idx = current_cluster_indices[best_origin_idx]
+
+            # 2. 找出需要被安排順序的中間點
+            middle_points = [p for p in current_cluster_indices if p != entry_point_idx and p != exit_point_idx]
+            
+            # 3. 使用我們全新的「固定路徑」解算器
+            print(f"正在規劃固定路徑: 從 {entry_point_idx} 到 {exit_point_idx}...")
+            cluster_path = solve_fixed_path_tsp_with_ga(entry_point_idx, exit_point_idx, middle_points, walking_matrix)
+            
+            # 4. 嚴格遵守計算出的離開點
+            last_exit_point_idx = exit_point_idx
+
+        # 合併路徑
+        for point_idx in cluster_path:
+            if point_idx not in final_route_indices:
+                final_route_indices.append(point_idx)
+
+    return final_route_indices
+
+
 
 def solve_open_tsp_bruteforce(point_indices, matrix):
     """
@@ -290,3 +444,65 @@ def solve_open_tsp_bruteforce(point_indices, matrix):
             best_path = list(permutation)
             
     return best_path
+
+def solve_fixed_path_tsp_with_ga(start_point_idx, end_point_idx, middle_points_indices, full_walking_matrix):
+    """
+    使用基因演算法，解決帶有固定起點和終點的 TSP 問題。
+    """
+    if not middle_points_indices:
+        return [start_point_idx, end_point_idx] if start_point_idx != end_point_idx else [start_point_idx]
+
+    # 參與排序的只有中間點
+    points_to_permute = middle_points_indices
+    num_points = len(points_to_permute)
+
+    # 建立子矩陣和索引映射，這與 solve_points_tsp_with_ga 類似
+    sub_matrix = np.full((num_points, num_points), 0)
+    index_map = {i: original_idx for i, original_idx in enumerate(points_to_permute)}
+    for i in range(num_points):
+        for j in range(num_points):
+            sub_matrix[i][j] = full_walking_matrix[index_map[i]][index_map[j]]
+
+    def fitness_function(solution):
+        # 檢查重複性
+        if len(set(solution)) < num_points:
+            return float('inf')
+        
+        # 將 solution (可能是 floats) 轉換為整數列表
+        path = [int(p) for p in solution]
+        
+        # 計算總時間
+        total_time = 0
+        # 1. 從固定起點到第一個中間點
+        total_time += full_walking_matrix[start_point_idx][index_map[path[0]]]
+        
+        # 2. 中間點之間的路徑 (FIXED)
+        for i in range(num_points - 1):
+            start_node = path[i]
+            end_node = path[i+1]
+            total_time += sub_matrix[start_node][end_node]
+            
+        # 3. 從最後一個中間點到固定終點
+        total_time += full_walking_matrix[index_map[path[-1]]][end_point_idx]
+
+        return total_time
+
+    varbound = np.array([[0, num_points - 1]] * num_points)
+    algorithm_param = {
+        'max_num_iteration': 1500,        # 增加迭代次數，給予更多演化時間
+        'population_size': 100,           # 增加族群大小，提升多樣性
+        'mutation_probability': 0.1,      # 保持或微調突變率
+        'elit_ratio': 0.01,
+        'crossover_probability': 0.5,
+        'parents_portion': 0.3,
+        'crossover_type': 'one_point',
+        'max_iteration_without_improv': None
+    }
+    model = ga(function=fitness_function, dimension=num_points, variable_type='int', variable_boundaries=varbound, algorithm_parameters=algorithm_param, convergence_curve=False, progress_bar=False)
+    model.run()
+    
+    best_local_middle_route = model.best_variable.astype(int)
+    best_global_middle_route = [index_map[i] for i in best_local_middle_route]
+    
+    # 組合最終路徑：起點 + 優化後的中間點 + 終點
+    return [start_point_idx] + best_global_middle_route + [end_point_idx]

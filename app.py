@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 from cluster_logic import perform_clustering
 # 匯入我們新建立的路徑規劃函式
-from routing_logic import calculate_cluster_matrix, solve_cluster_tsp_with_ga, create_final_itinerary, solve_open_tsp_bruteforce
+from routing_logic import calculate_cluster_matrix, solve_cluster_tsp_bruteforce, create_final_itinerary, solve_points_tsp_with_ga,solve_fixed_path_tsp_with_ga
 # --- 1. 初始化設定 (與之前相同) ---
 app = Flask(__name__)
 load_dotenv()
@@ -16,25 +16,47 @@ gmaps = googlemaps.Client(key=api_key)
 
 # --- 2. 核心功能函式 (與之前相同) ---
 def get_walking_time_matrix(locations):
-    # ... (程式碼與之前完全相同，此處省略) ...
-    try:
-        matrix = gmaps.distance_matrix(origins=locations,
-                                       destinations=locations,
-                                       mode="walking",
-                                       language="zh-TW")
-    except Exception as e:
-        print(f"呼叫 Google API 時發生錯誤: {e}")
-        return None
+    """
+    計算給定地點列表之間的步行時間矩陣。
+    (V3 - 修正：用極大值代替 -1 來處理無法到達的路徑)
+    """
     num_locations = len(locations)
-    time_matrix = [[-1] * num_locations for _ in range(num_locations)]
+    # 定義一個極大值來表示「無限遠」或「不可達」
+    # 使用整數比 float('inf') 對某些函式庫更安全
+    UNREACHABLE = 9999999 
+
+    # 先初始化一個 N x N 的矩陣，填滿我們的「不可達」值
+    time_matrix = [[UNREACHABLE] * num_locations for _ in range(num_locations)]
+
     for i in range(num_locations):
-        for j in range(num_locations):
-            if matrix['rows'][i]['elements'][j]['status'] == 'OK':
-                duration_seconds = matrix['rows'][i]['elements'][j]['duration']['value']
-                time_matrix[i][j] = duration_seconds
-            else:
-                print(f"警告: 無法計算從 '{locations[i]}' 到 '{locations[j]}' 的路徑。")
+        origin = [locations[i]]
+        destinations = locations
+
+        try:
+            matrix_result = gmaps.distance_matrix(origins=origin,
+                                                  destinations=destinations,
+                                                  mode="walking")
+            
+            row_elements = matrix_result['rows'][0]['elements']
+            
+            for j in range(len(row_elements)):
+                if row_elements[j]['status'] == 'OK':
+                    duration_seconds = row_elements[j]['duration']['value']
+                    time_matrix[i][j] = duration_seconds
+                else:
+                    # 如果路徑不存在，矩陣中會保留 UNREACHABLE 值
+                    # 我們依然可以印出警告，但程式不會再用 -1
+                    print(f"警告: 無法計算從 '{locations[i]}' 到 '{locations[j]}' 的路徑。")
+            
+            # 一個地點到自己的距離應為 0
+            time_matrix[i][i] = 0
+
+        except Exception as e:
+            print(f"呼叫 Google API 時發生錯誤 (處理起點 '{locations[i]}'): {e}")
+            continue
+            
     return time_matrix
+
 
 @app.route('/')
 def index():
@@ -75,7 +97,7 @@ def plan_route_api():
         return jsonify({"error": "無法形成任何群集"}), 500
     if len(clusters) == 1:
         single_cluster_indices = clusters[0]
-        final_route_indices = solve_open_tsp_bruteforce(single_cluster_indices, walking_matrix)
+        final_route_indices = solve_points_tsp_with_ga(single_cluster_indices, walking_matrix)
         final_route_locations = [locations[i] for i in final_route_indices]
         response = {
             "message": "所有地點都在同一個步行區域內，已優化內部步行路線。",
@@ -94,7 +116,7 @@ def plan_route_api():
         return jsonify({"error": "無法計算群集交通矩陣"}), 500
 
     # 3b: 基因演算法找出最佳群集順序
-    optimal_cluster_order = solve_cluster_tsp_with_ga(cluster_travel_matrix)
+    optimal_cluster_order = solve_cluster_tsp_bruteforce(cluster_travel_matrix)
     
     # 3c: 使用我們重構後的函式，產生最終的精確行程
     final_route_indices = create_final_itinerary(locations, clusters, optimal_cluster_order, walking_matrix, gmaps, mode=travel_mode)
