@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 from cluster_logic import perform_clustering
 # 匯入我們新建立的路徑規劃函式
-from routing_logic import calculate_cluster_matrix, solve_cluster_tsp_bruteforce, create_final_itinerary, solve_points_tsp_with_ga,solve_fixed_path_tsp_with_ga
+from routing_logic import calculate_cluster_matrix, solve_cluster_tsp_bruteforce, create_final_itinerary, solve_points_tsp_with_ga
 # --- 1. 初始化設定 (與之前相同) ---
 app = Flask(__name__)
 load_dotenv()
